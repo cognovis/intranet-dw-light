@@ -1,5 +1,7 @@
 -- intranet-dw-light/upgrade-3.3.1.0.0-3.3.1.1.0.sql
 
+SELECT acs_log__debug('/packages/intranet-dw-light/sql/postgresql/upgrade/upgrade-3.3.1.0.0-3.3.1.1.0.sql','');
+
 
 ---------------------------------------------------------
 -- Timesheet CSV
