@@ -151,7 +151,7 @@ ad_proc im_companies_csv1 {
 
     # Add DynField variables to the view
     # The function returns two lists, for "headers" and "vars"
-    set lol [im_dynfield::append_attributes_to_im_view -object_type "im_company"]
+    set lol [im_dynfield::append_attributes_to_im_view -object_type "im_company" -table_prefix "c."]
     set column_headers [concat $column_headers [lindex $lol 0]]
     set column_vars [concat $column_vars [lindex $lol 1]]
     set derefs [lindex $lol 2]
@@ -223,7 +223,7 @@ ad_proc im_companies_csv1 {
 	# Generate a header line for CSV export. Header uses the
 	# non-localized text so that it's identical in all languages.
 	if {"" != $csv_header} { append csv_header $csv_separator }
-	append csv_header "\"[ad_quotehtml $col]\""
+	append csv_header "\"[ad_quotehtml [lang::util::localize $col]]\""
 	
     }
     
@@ -361,7 +361,7 @@ ad_proc im_projects_csv1 {
 
     # Add DynField variables to the view
     # The function returns two lists, for "headers" and "vars"
-    set project_lol [im_dynfield::append_attributes_to_im_view -object_type "im_project"]
+    set project_lol [im_dynfield::append_attributes_to_im_view -object_type "im_project" -table_prefix "p."]
     set project_column_headers	[lindex $project_lol 0]
     set project_column_vars	[lindex $project_lol 1]
     set project_derefs		[lindex $project_lol 2]
@@ -381,16 +381,16 @@ ad_proc im_projects_csv1 {
     
     set criteria [list]
     if { ![empty_string_p $project_status_id] && $project_status_id > 0 } {
-	lappend criteria "p.project_status_id in ([join [im_sub_categories $project_status_id] ","])"
+	lappend criteria "im_projects.project_status_id in ([join [im_sub_categories $project_status_id] ","])"
     }
 
     if { ![empty_string_p $project_type_id] && $project_type_id != 0 } {
 	# Select the specified project type and its subtypes
-	lappend criteria "p.project_type_id in ([join [im_sub_categories $project_type_id] ","])"
+	lappend criteria "im_projects.project_type_id in ([join [im_sub_categories $project_type_id] ","])"
     }
     
     if { ![empty_string_p $company_id] && $company_id != 0 } {
-	lappend criteria "p.company_id=:company_id"
+	lappend criteria "im_projects.company_id=:company_id"
     }
 
     set where_clause [join $criteria " and\n	    "]
@@ -433,44 +433,45 @@ ad_proc im_projects_csv1 {
     "
 
     set status_where "
-	and p.project_id=s_create.project_id(+)
-	and p.project_id=s_quote.project_id(+)
-	and p.project_id=s_open.project_id(+)
-	and p.project_id=s_deliver.project_id(+)
-	and p.project_id=s_invoice.project_id(+)
-	and p.project_id=s_close.project_id(+)
+	and im_projects.project_id=s_create.project_id(+)
+	and im_projects.project_id=s_quote.project_id(+)
+	and im_projects.project_id=s_open.project_id(+)
+	and im_projects.project_id=s_deliver.project_id(+)
+	and im_projects.project_id=s_invoice.project_id(+)
+	and im_projects.project_id=s_close.project_id(+)
     "
 
 
     set sql "
 	SELECT
-		p.*,
+		im_projects.*,
 		[join $derefs "\n"]
 		c.company_name,
 		im_name_from_user_id(c.manager_id) as keyacc_name,
 		im_email_from_user_id(c.manager_id) as keyacc_email,
-		to_char(p.start_date, 'YYYY') as start_year,
-		to_char(p.end_date, 'YYYY') as end_year,
-		to_char(p.start_date, 'MM') as start_month,
-		to_char(p.end_date, 'MM') as end_month,
-		tree_level(p.tree_sortkey) as subproject_level,
-		im_name_from_user_id(p.project_lead_id) as lead_name,
-		im_email_from_user_id(p.project_lead_id) as lead_email,
-		im_project_nr_from_id(p.parent_id) as parent_project_nr,
-		im_category_from_id(p.project_type_id) as project_type,
-		im_category_from_id(p.project_status_id) as project_status,
-		im_category_from_id(p.on_track_status_id) as on_track_status,
-		im_category_from_id(p.billing_type_id) as billing_type,
+		to_char(im_projects.start_date, 'YYYY') as start_year,
+		to_char(im_projects.end_date, 'YYYY') as end_year,
+		to_char(im_projects.start_date, 'MM') as start_month,
+		to_char(im_projects.end_date, 'MM') as end_month,
+		tree_level(im_projects.tree_sortkey) as subproject_level,
+		im_name_from_user_id(im_projects.project_lead_id) as lead_name,
+		im_email_from_user_id(im_projects.project_lead_id) as lead_email,
+		im_project_nr_from_id(im_projects.parent_id) as parent_project_nr,
+		im_category_from_id(im_projects.project_type_id) as project_type,
+		im_category_from_id(im_projects.project_status_id) as project_status,
+		im_category_from_id(im_projects.on_track_status_id) as on_track_status,
+		im_category_from_id(im_projects.billing_type_id) as billing_type,
 		to_char(end_date, 'HH24:MI') as end_date_time
 	FROM
-		im_projects p
-		LEFT OUTER JOIN im_timesheet_tasks t ON (p.project_id = t.task_id),
+		im_projects p, im_projects
+		LEFT OUTER JOIN im_timesheet_tasks ON (im_projects.project_id = im_timesheet_tasks.task_id),
 		(select	company_id,
 			company_name,
 			manager_id
 		from	im_companies) c
 	WHERE
-		p.company_id = c.company_id
+		im_projects.company_id = c.company_id
+                and p.project_id = im_projects.project_id
 		$where_clause
     "
 
@@ -637,6 +638,7 @@ ad_proc im_timesheet_csv1 {
 		h.note as hours_note,
 		to_char(h.day, 'YYYY-MM-DD') as day_formatted,
 		u.*,
+                u.username as user_name,
 		e.*,
 		supervisor.email as supervisor_email,
 		im_name_from_user_id(supervisor.party_id) as supervisor_name,
@@ -708,6 +710,7 @@ ad_proc im_timesheet_csv1 {
 	    set ttt ""
 	    if {"" != $csv_line} { append csv_line $csv_separator }
 	    set cmd "set ttt $column_var"
+	    ds_comment "$cmd"
 	    eval "$cmd"
 	    append csv_line "\"[im_csv_duplicate_double_quotes $ttt]\""
 	}
@@ -1040,7 +1043,7 @@ ad_proc im_users_csv1 {
     set lol [im_dynfield::append_attributes_to_im_view -object_type "person"]
     set column_headers [concat $column_headers [lindex $lol 0]]
     set column_vars [concat $column_vars [lindex $lol 1]]
-
+    set dynfield_selects [join [lindex $lol 2] " "]
     # ---------------------------------------------------------------
     # Generate SQL Query
     
@@ -1053,8 +1056,11 @@ ad_proc im_users_csv1 {
     if { ![empty_string_p $where_clause] } {
 	set where_clause " and $where_clause"
     }
-    
+
     set extra_select ""
+    if {"" != $dynfield_selects} {
+	set extra_select ", [string trimright $dynfield_selects ","]" 
+    }
     set extra_from ""
     
 
@@ -1095,16 +1101,16 @@ ad_proc im_users_csv1 {
 		$where_clause
     "
 
+ns_log Notice "ad... $sql"
     # ---------------------------------------------------------------
     # Set up colspan to be the number of headers + 1 for the # column
 
     set csv_header ""
     foreach col $column_headers {
-	
 	# Generate a header line for CSV export. Header uses the
 	# non-localized text so that it's identical in all languages.
 	if {"" != $csv_header} { append csv_header $csv_separator }
-	append csv_header "\"[ad_quotehtml $col]\""
+	append csv_header "\"[ad_quotehtml [lang::util::localize $col]]\""
 	
     }
     
