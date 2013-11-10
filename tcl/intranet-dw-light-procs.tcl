@@ -3,9 +3,9 @@
 ad_library {
     Data Warehouse Light
     @author frank.bergmann@project-open.com
+    @author klaus.hofeditz@project-open.com
     @creation-date  26.5.2005
 }
-
 
 # -----------------------------------------------------------
 # Web page registrations
@@ -68,6 +68,7 @@ ad_proc im_dw_light_handler { } {
 	invoices { return [im_invoices_csv1 -vars $vars] }
 	timesheet { return [im_timesheet_csv1 -vars $vars] }
 	users { return [im_users_csv1 -vars $vars] }
+	vacation { return [im_vacation_csv] }
 	default {
 	    ad_return_complaint 1 "Invalid file name<br>
             You have specified an invalid file name."
@@ -207,7 +208,20 @@ ad_proc im_companies_csv1 {
 		im_category_from_id(c.company_status_id) as company_status,
 		im_category_from_id(c.annual_revenue_id) as annual_revenue
 	from 
-		im_offices o,
+		(	select	office_id,
+				office_name,
+				office_path,
+				phone,
+				fax,
+				address_line1,
+				address_line2,
+				address_city,
+				address_state,
+				address_postal_code,
+				address_country_code,
+				contact_person_id
+			from	im_offices
+		) o,
 		im_companies c $extra_table
 	where
 		c.main_office_id = o.office_id
@@ -442,6 +456,11 @@ ad_proc im_projects_csv1 {
     "
 
 
+    set im_gantt_projects_sql ","
+    if {[im_table_exists im_gantt_projects]} {
+	set im_gantt_projects_sql "LEFT OUTER JOIN im_gantt_projects gp ON (p.project_id = gp.project_id),"
+    }
+
     set sql "
 	SELECT
 		im_projects.*,
@@ -463,8 +482,9 @@ ad_proc im_projects_csv1 {
 		im_category_from_id(im_projects.billing_type_id) as billing_type,
 		to_char(end_date, 'HH24:MI') as end_date_time
 	FROM
-		im_projects p, im_projects
-		LEFT OUTER JOIN im_timesheet_tasks ON (im_projects.project_id = im_timesheet_tasks.task_id),
+		im_projects p
+		LEFT OUTER JOIN im_timesheet_tasks t ON (p.project_id = t.task_id)
+		$im_gantt_projects_sql
 		(select	company_id,
 			company_name,
 			manager_id
@@ -1156,6 +1176,134 @@ ns_log Notice "ad... $sql"
     set all_the_headers "HTTP/1.0 200 OK
 MIME-Version: 1.0
 Content-Type: $app_type; charset=$charset\r\n"
+    util_WriteWithExtraOutputHeaders $all_the_headers
+
+    ns_write $string_latin1
+
+}
+
+# -----------------------------------------------------------
+# Vacation CSV Export
+# -----------------------------------------------------------
+
+ad_proc im_vacation_csv {
+    
+} {  
+    Returns a CSV file for vacation data
+} {
+
+    #-- ----------------------------------------------------------
+    #   Defaults and Permissions 
+    #-- ----------------------------------------------------------
+
+    set current_user_id [ad_get_user_id]
+    if {![im_permission $current_user_id view_absences_all ]} {
+	ad_return_complaint 1 "<li>You have insufficiente privileges to view this page"
+	return
+    }
+
+    # Vars and constants 
+    set csv_separator ";"
+    set amp "&"
+
+    # TCL Encoding, application type and character set - iso8859-1 or UTF-8?
+    set tcl_encoding [parameter::get_from_package_key -package_key intranet-dw-light -parameter CsvTclCharacterEncoding -default "iso8859-1" ]
+    set app_type [parameter::get_from_package_key -package_key intranet-dw-light -parameter CsvContentType -default "application/csv"]
+    set charset [parameter::get_from_package_key -package_key intranet-dw-light -parameter CsvHttpCharacterEncoding -default "iso-8859-1"]
+
+    # Dates 
+    set current_year [db_string current_year "select to_char(now(), 'YYYY')"]
+    set date_format [im_l10n_sql_date_format]
+    set today [lindex [split [ns_localsqltimestamp] " "] 0]
+    set start_of_last_year "[expr $current_year - 1]-01-01"
+    set end_of_last_year "[expr $current_year - 1]-12-31"
+
+    set column_headers [list]
+    set column_vars [list]
+
+    # ---------------------------------------------------------------
+    # SQL Query
+    # ---------------------------------------------------------------
+
+    set sql "
+        SELECT
+                u.user_id,
+                im_name_from_user_id (u.user_id) as user_name,
+		sum(a.duration_days) as sum_duration_days,
+		e.vacation_balance,
+		e.vacation_days_per_year
+        FROM
+                parties pa,
+                persons pe,
+                users u
+                LEFT OUTER JOIN im_employees e ON (u.user_id = e.employee_id),
+                group_member_map m,
+                im_user_absences a,
+                acs_rels r
+        WHERE
+                u.user_id = r.object_id_two
+                AND r.object_id_one = 463
+                AND r.rel_type = 'membership_rel'
+                AND pa.party_id = pe.person_id
+                AND pe.person_id = u.user_id
+                AND u.user_id = m.member_id
+                AND m.group_id = acs__magic_object_id('registered_users')
+                AND m.container_id = m.group_id
+                AND m.rel_type = 'membership_rel'
+                AND a.owner_id = u.user_id
+                AND a.start_date >= to_date(:start_of_last_year, 'YYYY-MM-DD')
+                AND a.end_date <= to_date(:end_of_last_year, 'YYYY-MM-DD')
+                AND a.absence_type_id = 5000
+                AND a.absence_status_id <> 16006
+                AND a.absence_status_id <> 16002
+	GROUP BY 
+		user_id, user_name, e.vacation_balance,vacation_days_per_year 
+    "
+
+    # ---------------------------------------------------------------
+    # set CSV Header
+    set csv_header "[lang::message::lookup "" intranet-core.Id "Id"]$csv_separator"  
+    append csv_header "[lang::message::lookup "" intranet-hr.Name "Name"]$csv_separator" 
+    append csv_header "[lang::message::lookup "" intranet-hr.Vacation_Days_per_Year "Vacation Days per Year"] ([lang::message::lookup "" intranet-core.Current "current"])${csv_separator}"
+    append csv_header "[lang::message::lookup "" intranet-hr.Vacation_Balance "Vacation Balance"] ([lang::message::lookup "" intranet-core.Current "current"])${csv_separator}"
+    append csv_header "[lang::message::lookup "" intranet-timesheet2.Vacation_Taken_Last_Year "Vacation Days taken last Year"]$csv_separator"   
+    append csv_header "[lang::message::lookup "" intranet-hr.Vacation_Balance "Vacation Balance"]([lang::message::lookup "" intranet-core.New "new"])$csv_separator"
+    append csv_header "[lang::message::lookup "" intranet-hr.Vacation_Days_per_Year "Vacation Days per Year"]([lang::message::lookup "" intranet-core.New "new"])$csv_separator"
+
+    # ---------------------------------------------------------------
+
+    set ctr 0
+    set csv_body ""
+
+    db_foreach users_info_query $sql {
+
+	if { ![info exists vacation_balance] || "" == $vacation_balance } { set vacation_balance 0 }
+        if { ![info exists vacation_days_per_year] || "" == $vacation_days_per_year } { set vacation_days_per_year 0 }
+        if { ![info exists sum_duration_days] || "" == $sum_duration_days } { set sum_duration_days 0 }
+
+	set new_vacation_balance [expr $vacation_balance + $vacation_days_per_year - $sum_duration_days]
+	append csv_body "${user_id}${csv_separator}${user_name}$csv_separator"
+	append csv_body "[lc_numeric $vacation_days_per_year]$csv_separator"
+	append csv_body "[lc_numeric $vacation_balance]$csv_separator"
+	append csv_body "[lc_numeric $sum_duration_days]$csv_separator"
+	append csv_body "[lc_numeric $new_vacation_balance]$csv_separator" 
+	append csv_body "[lc_numeric $vacation_days_per_year]\n"
+    }
+
+    # Put everything together 
+    set string "$csv_header\r\n$csv_body\r\n"
+    	
+    if {"utf-8" == $tcl_encoding} { 
+	set string_latin1 $string 
+    } else {
+	set string_latin1 [encoding convertto $tcl_encoding $string]
+    }
+
+    # For some reason we have to send out a "hard" HTTP
+    # header. ns_return and ns_respond don't seem to convert
+    # the content string into the right Latin1 encoding.
+    # So we do this manually here...
+    set all_the_headers "HTTP/1.0 200 OK MIME-Version: 1.0 Content-Type: $app_type; charset=$charset\r\n"
     util_WriteWithExtraOutputHeaders $all_the_headers
 
     ns_write $string_latin1
